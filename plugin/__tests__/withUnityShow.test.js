@@ -3,8 +3,10 @@
 const {
   createUnityFrameworkPodspec,
   normalizeUnityShowPluginOptions,
+  mergeUnityGradleProperties,
   updateAndroidAppBuildGradle,
   updateAndroidSettingsGradle,
+  updateUnityAndroidBuildGradle,
   updateIosPodfile,
 } = require('../withUnityShow');
 
@@ -43,6 +45,39 @@ describe('withUnityShow config plugin helpers', () => {
 
     expect(result).toContain("if (findProject(':unityLibrary') != null)");
     expect(result).toContain("implementation project(':unityLibrary')");
+  });
+
+  it('adapts Unity streaming assets for included Gradle builds', () => {
+    const buildGradle =
+      "noCompress = ['.unity3d'] + unityStreamingAssets.tokenize(', ')";
+
+    const result = updateUnityAndroidBuildGradle(buildGradle);
+
+    expect(result).toContain(
+      "+ (findProperty('unityStreamingAssets') ?: '').tokenize(', ')"
+    );
+    expect(updateUnityAndroidBuildGradle(result)).toBe(result);
+  });
+
+  it('merges Unity-specific export properties into the host project', () => {
+    const result = mergeUnityGradleProperties(
+      [{ type: 'property', key: 'android.useAndroidX', value: 'true' }],
+      [
+        'unityStreamingAssets=',
+        'unity.androidNdkPath=C:/Unity/NDK',
+        'org.gradle.jvmargs=-Xmx4096M',
+      ].join('\n')
+    );
+
+    expect(result).toEqual([
+      { type: 'property', key: 'android.useAndroidX', value: 'true' },
+      { type: 'property', key: 'unityStreamingAssets', value: '' },
+      {
+        type: 'property',
+        key: 'unity.androidNdkPath',
+        value: 'C:/Unity/NDK',
+      },
+    ]);
   });
 
   it('adds a conditional UnityFramework pod to Podfile idempotently', () => {

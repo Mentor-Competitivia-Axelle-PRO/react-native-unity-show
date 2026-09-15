@@ -1,11 +1,13 @@
 function loadModule({
   nativeModules = {},
   expoModule = null,
+  expoViewManager = null,
   os = 'ios',
   viewManagerConfig = null,
 }: {
   nativeModules?: Record<string, unknown>;
   expoModule?: unknown;
+  expoViewManager?: unknown;
   os?: string;
   viewManagerConfig?: unknown;
 } = {}) {
@@ -18,6 +20,7 @@ function loadModule({
     remove: jest.fn(),
   };
   const expoAddListener = jest.fn(() => expoSubscription);
+  const requireNativeViewManager = jest.fn(() => expoViewManager);
   const nativeAddListener = jest.fn(() => nativeSubscription);
 
   jest.doMock('react-native', () => ({
@@ -40,12 +43,14 @@ function loadModule({
       addListener: expoAddListener,
     })),
     requireOptionalNativeModule: jest.fn(() => expoModule),
+    requireNativeViewManager,
   }));
 
   return {
     mocks: {
       expoAddListener,
       expoSubscription,
+      requireNativeViewManager,
       nativeAddListener,
       nativeSubscription,
     },
@@ -121,6 +126,17 @@ describe('react-native-unity-show public API', () => {
     } = loadModule();
 
     expect(UnityShowView).toBeTruthy();
+  });
+
+  it('loads the native view through the Expo module adapter', () => {
+    const {
+      mocks: { requireNativeViewManager },
+    } = loadModule({
+      expoModule: { multiply: jest.fn() },
+      expoViewManager: 'UnityShowExpoView',
+    });
+
+    expect(requireNativeViewManager).toHaveBeenCalledWith('UnityShowExpo');
   });
 
   it('delegates Unity messages to the Expo module when implemented', async () => {
