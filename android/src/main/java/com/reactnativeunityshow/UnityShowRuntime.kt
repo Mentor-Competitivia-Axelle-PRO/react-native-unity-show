@@ -46,6 +46,12 @@ internal object UnityShowRuntime {
       }
 
       view.requestFocus()
+      // Match the lifecycle sequence used by Unity's generated
+      // UnityPlayerActivity. Creating the player alone only creates the
+      // surface; Unity starts rendering after these callbacks.
+      invokeUnityPlayerIfPresent("onStart")
+      invokeUnityPlayerIfPresent("onResume")
+      invokeUnityPlayerBooleanIfPresent("windowFocusChanged", true)
       updateState("loaded", source?.get("initialScene") as? String)
       UnityShowEventBus.emitReady(resolveUnityVersion())
     }
@@ -129,8 +135,7 @@ internal object UnityShowRuntime {
 
     val playerClass = loadUnityPlayerClass()
     val player = createUnityPlayer(playerClass, activity)
-    val view = player as? View
-      ?: throw UnityShowRuntimeException("UnityPlayer is not an Android View.")
+    val view = resolveUnityView(player)
 
     unityPlayer = player
     unityView = view
@@ -163,9 +168,52 @@ internal object UnityShowRuntime {
       }
     }
 
+    // Unity 6 exports UnityPlayer as an abstract base class. The concrete
+    // player used by an embedded Activity is UnityPlayerForActivityOrService.
+    try {
+      val activityOrServiceClass = Class.forName(
+        "com.unity3d.player.UnityPlayerForActivityOrService",
+        true,
+        playerClass.classLoader,
+      )
+      return activityOrServiceClass
+        .getConstructor(Context::class.java)
+        .newInstance(activity)
+    } catch (_: ClassNotFoundException) {
+      // Fall through to the version-independent error below.
+    } catch (exception: ReflectiveOperationException) {
+      throw UnityShowRuntimeException("Unable to create UnityPlayerForActivityOrService.", exception)
+    }
+
     throw UnityShowRuntimeException(
-      "UnityPlayer constructor was not found. Expected Activity or Context constructor."
+      "UnityPlayer constructor was not found. Expected a legacy Activity/Context constructor or UnityPlayerForActivityOrService(Context)."
     )
+  }
+
+  private fun resolveUnityView(player: Any): View {
+    if (player is View) {
+      return player
+    }
+
+    return try {
+      // Unity 6 separates the player object from its Android layout. The
+      // FrameLayout is the correct surface to embed because it also retains
+      // Unity's internal overlays and lifecycle-managed children.
+      val frameLayout = player.javaClass
+        .getMethod("getFrameLayout")
+        .invoke(player) as? View
+      frameLayout ?: player.javaClass
+        .getMethod("getView")
+        .invoke(player) as? View
+        ?: throw UnityShowRuntimeException("UnityPlayer did not return an Android View.")
+    } catch (exception: InvocationTargetException) {
+      throw UnityShowRuntimeException(
+        "UnityPlayer.getView() threw an exception.",
+        exception.targetException,
+      )
+    } catch (exception: ReflectiveOperationException) {
+      throw UnityShowRuntimeException("Unable to obtain the UnityPlayer view.", exception)
+    }
   }
 
   private fun invokeUnityPlayer(methodName: String) {
@@ -176,6 +224,25 @@ internal object UnityShowRuntime {
   private fun invokeUnityPlayerIfPresent(methodName: String) {
     unityPlayer?.let { player ->
       invokeUnityPlayerMethod(player, methodName)
+    }
+  }
+
+  private fun invokeUnityPlayerBooleanIfPresent(methodName: String, value: Boolean) {
+    unityPlayer?.let { player ->
+      try {
+        player.javaClass
+          .getMethod(methodName, Boolean::class.javaPrimitiveType)
+          .invoke(player, value)
+      } catch (exception: NoSuchMethodException) {
+        throw UnityShowRuntimeException("UnityPlayer.$methodName() was not found.", exception)
+      } catch (exception: InvocationTargetException) {
+        throw UnityShowRuntimeException(
+          "UnityPlayer.$methodName() threw an exception.",
+          exception.targetException,
+        )
+      } catch (exception: ReflectiveOperationException) {
+        throw UnityShowRuntimeException("Unable to call UnityPlayer.$methodName().", exception)
+      }
     }
   }
 

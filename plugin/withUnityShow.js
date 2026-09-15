@@ -6,6 +6,7 @@ const {
   createRunOncePlugin,
   withAppBuildGradle,
   withDangerousMod,
+  withGradleProperties,
   withPodfile,
   withSettingsGradle,
 } = require('@expo/config-plugins');
@@ -53,7 +54,92 @@ function withUnityShowAndroid(config, options) {
     return modConfig;
   });
 
+  // Unity exports build properties next to unityLibrary; copy only Unity-
+  // scoped values into the host project so the export can build consistently.
+  config = withGradleProperties(config, (modConfig) => {
+    const unityLibraryPath = path.resolve(
+      modConfig.modRequest.platformProjectRoot,
+      options.android.unityLibraryPath
+    );
+    const unityGradlePropertiesPath = path.resolve(
+      unityLibraryPath,
+      '..',
+      'gradle.properties'
+    );
+
+    if (fs.existsSync(unityGradlePropertiesPath)) {
+      modConfig.modResults = mergeUnityGradleProperties(
+        modConfig.modResults,
+        fs.readFileSync(unityGradlePropertiesPath, 'utf8')
+      );
+    }
+
+    return modConfig;
+  });
+
+  // Unity's generated Gradle script can reference a missing property when it
+  // is included as a library, so patch that reference before Gradle runs.
+  config = withDangerousMod(config, [
+    'android',
+    async (modConfig) => {
+      const unityLibraryPath = path.resolve(
+        modConfig.modRequest.platformProjectRoot,
+        options.android.unityLibraryPath
+      );
+      const unityBuildGradlePath = path.join(
+        unityLibraryPath,
+        'build.gradle'
+      );
+
+      if (fs.existsSync(unityBuildGradlePath)) {
+        const contents = fs.readFileSync(unityBuildGradlePath, 'utf8');
+        const updatedContents = updateUnityAndroidBuildGradle(contents);
+        if (updatedContents !== contents) {
+          fs.writeFileSync(unityBuildGradlePath, updatedContents);
+        }
+      }
+
+      return modConfig;
+    },
+  ]);
+
   return config;
+}
+
+function updateUnityAndroidBuildGradle(contents) {
+  return contents.replace(
+    /\+\s*unityStreamingAssets\.tokenize\((['"]),\s*\1\)/g,
+    "+ (findProperty('unityStreamingAssets') ?: '').tokenize(', ')"
+  );
+}
+
+function mergeUnityGradleProperties(gradleProperties, unityContents) {
+  const unityProperties = unityContents
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#') && line.includes('='))
+    .map((line) => {
+      const separatorIndex = line.indexOf('=');
+      return {
+        type: 'property',
+        key: line.slice(0, separatorIndex).trim(),
+        value: line.slice(separatorIndex + 1).trim(),
+      };
+    })
+    .filter(
+      ({ key }) =>
+        key.startsWith('unity.') ||
+        key === 'unityStreamingAssets' ||
+        key === 'unityTemplateVersion'
+    );
+
+  const unityKeys = new Set(unityProperties.map(({ key }) => key));
+  return [
+    ...gradleProperties.filter(
+      (item) => item.type !== 'property' || !unityKeys.has(item.key)
+    ),
+    ...unityProperties,
+  ];
 }
 
 function withUnityShowIos(config, options) {
@@ -261,5 +347,7 @@ module.exports.withUnityShow = withUnityShow;
 module.exports.normalizeUnityShowPluginOptions = normalizeUnityShowPluginOptions;
 module.exports.updateAndroidSettingsGradle = updateAndroidSettingsGradle;
 module.exports.updateAndroidAppBuildGradle = updateAndroidAppBuildGradle;
+module.exports.updateUnityAndroidBuildGradle = updateUnityAndroidBuildGradle;
+module.exports.mergeUnityGradleProperties = mergeUnityGradleProperties;
 module.exports.updateIosPodfile = updateIosPodfile;
 module.exports.createUnityFrameworkPodspec = createUnityFrameworkPodspec;

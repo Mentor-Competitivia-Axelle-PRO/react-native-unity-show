@@ -199,9 +199,25 @@ const UnityShowUserAgent = NativeModules.UnityShowUserAgent
       }
     );
 
-const NativeUnityShowView = UIManager.getViewManagerConfig?.(UNITY_SHOW_VIEW_NAME)
-  ? requireNativeComponent<UnityShowNativeViewProps>(UNITY_SHOW_VIEW_NAME)
-  : null;
+// Expo Modules and legacy React Native register native views differently.
+// Prefer the Expo adapter, while retaining compatibility with older hosts.
+function loadNativeUnityShowView(): React.ComponentType<UnityShowNativeViewProps> | null {
+  if (UnityShowExpo && ExpoModulesCoreModule?.requireNativeViewManager) {
+    try {
+      return ExpoModulesCoreModule.requireNativeViewManager<UnityShowNativeViewProps>(
+        'UnityShowExpo'
+      );
+    } catch {
+      // Fall through to the legacy React Native view manager.
+    }
+  }
+
+  return UIManager.getViewManagerConfig?.(UNITY_SHOW_VIEW_NAME)
+    ? requireNativeComponent<UnityShowNativeViewProps>(UNITY_SHOW_VIEW_NAME)
+    : null;
+}
+
+const NativeUnityShowView = loadNativeUnityShowView();
 
 function getUnityBridgeModules(): UnityShowBridgeNativeModule[] {
   return [UnityShowExpo, LegacyUnityShow].filter(
